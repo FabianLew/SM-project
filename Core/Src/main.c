@@ -40,7 +40,8 @@
 /* USER CODE BEGIN PD */
 #define BMP280_SPI (&hspi4)
 #define BMP280_CS1 1
-#define BMP280_CS2 2
+#define BMP280_SPI_BUFFER_LEN 28
+#define BMP280_DATA_INDEX 1
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -77,25 +78,29 @@ int8_t bmp280_spi_reg_write(uint8_t cs, uint8_t reg_addr, uint8_t *data, uint16_
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+/**
+  * @brief  Support of regulation
+  * @param Actual temperature measured with sensor
+  * @retval float
+  */
 float PID (float actual) {
 	static float e1 = 0.0;
 	static float e = 0.0;
 	static float I1 = 0.0;
-//	static float mD1 = 0.0;
 	static float m = 0.0;
-
 	float I = 0.0;
 	float D = 0.0;
 	float P = 0.0;
 	e=setpoint-actual;
 
-	//calka
+	/* integral term */
 	I = kI*Tp*e+I1;
 
-	//rozniczka
+	/* derivative term */
 	D = kD/Tp*(e-e1);
 
-	//proporcjonalny
+	/* proportional term */
 	P = kP*e;
 
 	e1=e;
@@ -125,10 +130,13 @@ float PID (float actual) {
 	}
 
 	return m;
-
 }
 
-
+/**
+* @brief EXTI line detection callbacks .
+* @param GPIO_Pin Specifies the pins connected EXTI line
+* @retval None
+*/
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
   if(GPIO_Pin==USER_Btn_Pin){
@@ -137,6 +145,11 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
   }
 }
 
+/**
+  * @brief  Period elapsed callback in non-blocking mode
+  * @param  htim TIM handle
+  * @retval None
+  */
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 	float toSet = 0.0;
 	setpoint=((int)TIM1->CNT)*scale;
@@ -198,7 +211,7 @@ int main(void)
 
   rslt = bmp280_init(&bmp280_1);
   /* Always read the current settings before writing, especially when
-       * all the configuration is not modified
+   	   * all the configuration is not modified
        */
   rslt = bmp280_get_config(&conf, &bmp280_1);
   /* configuring the temperature oversampling, filter coefficient and output data rate */
@@ -219,15 +232,12 @@ int main(void)
 
   int32_t temp32;
   double temp;
-  //bosch do actualValue
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-	  //int state2;
-	  //state2 = HAL_GPIO_ReadPin(Output_resistors_GPIO_Port,Output_resistors_Pin);
 
 	  /* Reading the raw data from sensor */
 	  rslt = bmp280_get_uncomp_data(&bmp280_1_data, &bmp280_1);
@@ -308,8 +318,21 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
-#define BMP280_SPI_BUFFER_LEN 28
-#define BMP280_DATA_INDEX 1
+
+
+/*!
+* @brief Function for writing the sensor 's registers through SPI bus.
+*
+* @param [in] cs : Chip select to enable the sensor .
+* @param [in] reg_addr : Register address .
+* @param [in] reg_data : Pointer to the data buffer whose data has to be written
+* @param [in] length : No of bytes to write .
+*
+* @return Status of execution
+* @retval 0 -> Success
+* @retval >0 -> Failure Info
+*
+*/
 int8_t bmp280_spi_reg_write ( uint8_t cs , uint8_t reg_addr , uint8_t * reg_data , uint16_t
 length )
  {
@@ -346,6 +369,20 @@ length )
 
  return ( int8_t ) iError ;
 }
+
+/*!
+* @brief Function for reading the sensor 's registers through SPI bus.
+*
+* @param [in] cs : Chip select to enable the sensor .
+* @param [in] reg_addr : Register address .
+* @param [ out] reg_data : Pointer to the data buffer to store the read data .
+* @param [in] length : No of bytes to read .
+*
+* @return Status of execution
+* @retval 0 -> Success
+* @retval >0 -> Failure Info
+*
+*/
 int8_t bmp280_spi_reg_read ( uint8_t cs , uint8_t reg_addr , uint8_t * reg_data , uint16_t
 length )
  {
