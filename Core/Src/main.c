@@ -23,7 +23,6 @@
 #include "tim.h"
 #include "usart.h"
 #include "gpio.h"
-#include <math.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -40,8 +39,6 @@
 /* USER CODE BEGIN PD */
 #define BMP280_SPI (&hspi4)
 #define BMP280_CS1 1
-#define BMP280_SPI_BUFFER_LEN 28
-#define BMP280_DATA_INDEX 1
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -54,18 +51,16 @@
 /* USER CODE BEGIN PV */
 
 GPIO_PinState state = GPIO_PIN_RESET;
-float setpoint = 0.0;
+float setpoint = 25.0;
 float actualValue = 0.0;
 float kP = 1.0;
 float kI = 0.5;
 float kD = 0.1;
-const float Tp = 0.001;
+const float Tp = 0.125;
 float maxI = 200;
 float maxD = 200;
 float maxm = 1000;
 const float scale = 50.0/5000.0;
-
-
 
 /* USER CODE END PV */
 
@@ -88,7 +83,9 @@ float PID (float actual) {
 	static float e1 = 0.0;
 	static float e = 0.0;
 	static float I1 = 0.0;
+//	static float mD1 = 0.0;
 	static float m = 0.0;
+
 	float I = 0.0;
 	float D = 0.0;
 	float P = 0.0;
@@ -104,7 +101,7 @@ float PID (float actual) {
 	P = kP*e;
 
 	e1=e;
-	I1=I;
+
 
 	if(I > maxI) {
 		I = maxI;
@@ -125,11 +122,12 @@ float PID (float actual) {
 
 	if(m > maxm) {
 		m=maxm;
-	} else if (m < 0) {
+	} else if (m <= 0.0) {
 		m=0.0;
 	}
-
+	I1=I;
 	return m;
+
 }
 
 /**
@@ -137,12 +135,17 @@ float PID (float actual) {
 * @param GPIO_Pin Specifies the pins connected EXTI line
 * @retval None
 */
-void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
-{
-  if(GPIO_Pin==USER_Btn_Pin){
-	  HAL_GPIO_TogglePin(Output_resistors_GPIO_Port,Output_resistors_Pin);
-	  HAL_GPIO_TogglePin(LD1_GPIO_Port, LD1_Pin);
-  }
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin){
+    if(GPIO_Pin == User_btn_ex1_Pin){
+        if(setpoint<50){
+        	setpoint = setpoint + 1;
+        }
+    }
+    if(GPIO_Pin == User_btn_ex2_Pin){
+        if(setpoint>25){
+        	setpoint = setpoint - 1;
+        }
+    }
 }
 
 /**
@@ -152,9 +155,23 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
   */
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 	float toSet = 0.0;
-	setpoint=((int)TIM1->CNT)*scale;
+	//setpoint=((int)TIM1->CNT)*scale;
 	toSet=PID(actualValue);
-	__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, floorf(toSet));
+	__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, floorf(toSet));
+}
+
+int dutyCycleR = 0;
+char recievedMessage[6];
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+	if(huart->Instance == USART3){
+		sscanf(recievedMessage, "Temp%d", &dutyCycleR);
+		if(dutyCycleR<=50 && dutyCycleR>=25){
+			setpoint=(float)dutyCycleR;
+		}
+		HAL_UART_Transmit(&huart3, recievedMessage, 6, 100);
+		HAL_UART_Receive_IT(&huart3, (uint8_t*)recievedMessage, 6);
+	}
 }
 /* USER CODE END 0 */
 
@@ -173,7 +190,7 @@ int main(void)
 			.delay_ms = HAL_Delay
 
 		};
-		struct bmp280_uncomp_data bmp280_1_data;
+	struct bmp280_uncomp_data bmp280_1_data;
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -182,7 +199,7 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-
+  HAL_UART_Receive_IT(&huart3, (uint8_t*)recievedMessage, 6);
   /* USER CODE END Init */
 
   /* Configure the system clock */
@@ -202,17 +219,18 @@ int main(void)
   MX_TIM1_Init();
   /* USER CODE BEGIN 2 */
   HAL_TIM_Base_Start_IT(&htim3);
-  HAL_GPIO_WritePin(Output_resistors_GPIO_Port, Output_resistors_Pin, GPIO_PIN_RESET);
+  HAL_UART_Receive_IT(&huart3, recievedMessage, 6);
+ // HAL_GPIO_WritePin(Output_resistors_GPIO_Port, Output_resistors_Pin, GPIO_PIN_RESET);
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
-  HAL_TIM_Encoder_Start(&htim1, TIM_CHANNEL_ALL);
-  TIM1->CNT=3000;
+  //HAL_TIM_Encoder_Start(&htim1, TIM_CHANNEL_ALL);
+  //TIM1->CNT=3000;
   int8_t rslt;
   struct bmp280_config conf;
 
   rslt = bmp280_init(&bmp280_1);
   /* Always read the current settings before writing, especially when
-   	   * all the configuration is not modified
-       */
+  * all the configuration is not modified
+  */
   rslt = bmp280_get_config(&conf, &bmp280_1);
   /* configuring the temperature oversampling, filter coefficient and output data rate */
   /* Overwrite the desired settings */
@@ -222,8 +240,8 @@ int main(void)
   conf.os_temp = BMP280_OS_1X;
 
 
-  /* Setting the output data rate as 1HZ(1000ms) */
-  conf.odr = BMP280_ODR_1000_MS;
+  /* Setting the output data rate as 8Hz(125ms) */
+  conf.odr = BMP280_ODR_125_MS;
   rslt = bmp280_set_config(&conf, &bmp280_1);
   //print_rslt(" bmp280_set_config status", rslt);
 
@@ -247,10 +265,15 @@ int main(void)
 
 	  /* Getting the compensated temperature as floating point value */
 	  rslt = bmp280_get_comp_temp_double(&temp, bmp280_1_data.uncomp_temp, &bmp280_1);
-	  /* Sleep time between measurements = BMP280_ODR_1000_MS */
+	  /* Sleep time between measurements = BMP280_ODR_125_MS */
 	  actualValue = (float)temp;
-	  bmp280_1.delay_ms(1000);
 
+	  char tx_buffer[25];
+	  int tx_n = sprintf(tx_buffer , "Temp: %.2f [degC]\r\n" , (float)temp);
+	  HAL_UART_Transmit(&huart3, (uint8_t*)tx_buffer , tx_n , 100);
+
+
+	  bmp280_1.delay_ms(125);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -319,7 +342,6 @@ void SystemClock_Config(void)
 
 /* USER CODE BEGIN 4 */
 
-
 /*!
 * @brief Function for writing the sensor 's registers through SPI bus.
 *
@@ -333,6 +355,8 @@ void SystemClock_Config(void)
 * @retval >0 -> Failure Info
 *
 */
+#define BMP280_SPI_BUFFER_LEN 28
+#define BMP280_DATA_INDEX 1
 int8_t bmp280_spi_reg_write ( uint8_t cs , uint8_t reg_addr , uint8_t * reg_data , uint16_t
 length )
  {
